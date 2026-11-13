@@ -1,7 +1,8 @@
 # chainfix
-<<<<<<< HEAD
 
 chainfix checks the sector chains on FLEX disk images under Linux and can rebuild the free-sector chain. It is a C version of **CHAINFIX V1.0** (Caterpillar Software Co.), a FLEX09 utility for the 6809. The original program had bugs that could hang it or damage a disk. This version fixes them.
+
+The repository also has a port of the original program to the **6800 and FLEX 2.0** (`chainfix68.asm`). It runs on the machine itself, not on an image. See [6800 FLEX version](#6800-flex-version).
 
 ## What it does
 
@@ -145,6 +146,55 @@ These checks are new:
 - names of the files involved in each intersection and collision;
 - refusal to relink a disk with damaged file chains.
 
+## 6800 FLEX version
+
+`chainfix68.asm` is a translation of the 6809 original to the 6800, for FLEX 2.0. It is a native FLEX command: it asks for a drive number (0–3), checks the disk in that drive, prints the same report as the original, and asks `Relink the free chain (Y/N)`.
+
+**Not yet tested on hardware or in an emulator.** It assembles cleanly, but treat it as experimental and use it on a copy of a disk first.
+
+### Building
+
+```sh
+as0 chainfix68.asm -l > chainfix68.lst    # writes chainfix68.s19
+```
+
+`as0` is the Motorola freeware 6800 assembler; any 6800 assembler with Motorola syntax should work. Convert the S-record file to a FLEX `.CMD` binary with your usual tool before copying it to a FLEX disk.
+
+### Memory and addresses
+
+| Item | Address |
+|---|---|
+| Program (load and start at `$0100`) | `$0100`–`$06E5` |
+| File bitmap | `$1000`–`$2FFF` |
+| Free bitmap | `$3000`–`$4FFF` |
+| Directory FCB | `$5000` |
+| Sector FCB (buffer at `$5180`) | `$5140` |
+| Variables | `$5280`–`$52AE` |
+
+The machine needs user RAM up to about `$52C0` (21 KB). FLEX entry points are the standard 6800 FLEX 2.0 ones: DOS at `$AD00`, FMS at `$B406`.
+
+### Differences from the 6809 original
+
+The program logic is the same as the original, with these fixes from [`analysis.md`](analysis.md):
+
+| § | Original behaviour | 6800 version |
+|---|---|---|
+| 4.1 | Collision check branches back to its own start and hangs | Scans once |
+| 4.2 | A looping chain is followed forever | The trace stops at the first intersection |
+| 4.3 | A bad link causes a disk error and exits to FLEX | Links are range checked; `Bad link at - TTSS` is printed and that chain ends |
+| 4.4 | An empty free chain (full disk) reads sector 00/00 and exits | An empty chain is skipped |
+| 4.5 | The directory is found through sector 00/04's link | 00/04 is reserved and the directory is traced from 00/05 |
+| 4.10 | End of the new free chain is left uninitialised | Set to 00/00 |
+| 4.11 | The last 8 sectors of the 64K range are not scanned | Every sector is scanned |
+
+Because a trace now stops at an intersection or a bad link, that file is usually also reported as `File end INCORECT`.
+
+The other problems in `analysis.md` are still present, notably:
+- relink writes the free sectors one at a time and then the SIR, so an interrupted relink leaves the disk inconsistent (4.7);
+- relink is offered even when files are cross-linked, and frees the orphaned tail of a cut-short file (4.8);
+- track 0 is assumed to have as many sectors as the other tracks (4.6);
+- "Total number of intersections" adds a sector count to a file count (4.9).
+
 ## Files
 
 | File | Description |
@@ -153,8 +203,6 @@ These checks are new:
 | `Makefile` | Build |
 | `analysis.md` | Analysis of the original 6809 program |
 | `chainfix09.asm` | Commented disassembly of the original |
+| `chainfix68.asm` | 6800 FLEX 2.0 port of the original, with fixes |
 | `t/` | Original `CHAINFIX.CMD`, `CHAINFIX.DOC`, and the disassembler's input and output files |
 | `hdflex2.dsk` | Sample hard-disk image (255 tracks × 255 sectors) |
-=======
-Fixes Flex file system chain link issues on disk image under Linux
->>>>>>> 423164014d1f019cf6fcc04c6d9e4946894c04d6
