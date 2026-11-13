@@ -22,6 +22,16 @@
 *  - Small side effects of the port: the bitmap scans now also scan
 *    the last byte ($FFF8-$FFFF) (analysis.md 4.11), and FS_TAIL_TS
 *    is cleared before relink (analysis.md 4.10).
+*  - Fixes from analysis.md:
+*    4.2 TRACE_CHAIN stops at the first intersection, so a looped
+*        chain can no longer run forever.
+*    4.3 Each link is range checked (track <= MaxTrack, sector 1 to
+*        MaxSector) before it is read. A bad link is reported and
+*        ends that chain instead of aborting the program.
+*    4.4 TRACE_CHAIN returns at once on 00/00, so an empty free
+*        chain (full disk) no longer aborts the program.
+*    4.5 T0/S4 is marked on its own and the directory chain is
+*        traced from T0/S5.
 *
 * Key Memory Structures
 *
@@ -111,8 +121,8 @@ PAD_LOOP           JSR       SET_BIT
                    CMPA      MAX_TS
                    BLS       PAD_LOOP
 
-* Reserve boot sectors and SIR, then trace the chain from T0/S4
-* (this marks the directory if S4 links to S5, see analysis.md 4.5)
+* Reserve boot sectors, SIR and T0/S4, then trace the directory
+* chain from T0/S5 (analysis.md 4.5)
 
                    CLRA
                    LDAB      #$01                   T0/S1 boot
@@ -121,7 +131,9 @@ PAD_LOOP           JSR       SET_BIT
                    JSR       SET_BIT
                    LDAB      #$03                   T0/S3 SIR
                    JSR       SET_BIT
-                   LDAB      #$04                   T0/S4 -> directory chain
+                   LDAB      #$04                   T0/S4 reserved
+                   JSR       SET_BIT
+                   LDAB      #$05                   T0/S5 directory chain
                    JSR       TRACE_CHAIN
 
 * ------------------------------------------------------------------------------
@@ -451,35 +463,49 @@ PFN_END            LDAA      #$20                   Trailing space
 
 * ==============================================================================
 * TRACE_CHAIN - follow a sector chain, marking each T/S in the active bitmap
-* Entry: A = track, B = sector of first sector
+* Entry: A = track, B = sector of first sector (00/00 = empty chain)
+* Stops at 00/00, at the first intersection, or at a bad link. The last
+* two clear COLLFLG. LST_TS holds the last sector actually read.
 * ==============================================================================
 
 TRACE_CHAIN        CLR       PRGCNTR
-TC_LOOP            JSR       SET_BIT
+TC_LOOP            TSTA                             00/00 -> end of chain (4.4)
+                   BNE       TC_CHK
+                   TSTB
+                   BEQ       TC_DONE
+TC_CHK             CMPA      MAX_TS                 Range check the link (4.3)
+                   BHI       TC_BAD                 Track > MaxTrack
+                   TSTB
+                   BEQ       TC_BAD                 Sector 0
+                   CMPB      MAX_SCT
+                   BHI       TC_BAD                 Sector > MaxSector
+                   JSR       SET_BIT
                    BEQ       TC_READ                Bit was clear -> normal
 
-* Already marked: intersection
+* Already marked: intersection. Report it and stop (4.2)
 
-                   CLR       COLLFLG
+                   LDX       #MSG_INTER             "Intersection at - "
+                   BRA       TC_RPT
+
+* Link outside the disk: report it and stop (4.3)
+
+TC_BAD             LDX       #MSG_BADLNK            "Bad link at - "
+TC_RPT             CLR       COLLFLG
                    STAA      TCTS
                    STAB      TCTS+1
-                   LDX       #MSG_INTER             "Intersection at - "
                    JSR       PSTRNG
                    LDX       #TCTS
                    JSR       OUTADR
-                   LDAA      TCTS
-                   LDAB      TCTS+1
+TC_DONE            RTS
+
 TC_READ            JSR       READ_SEC
                    INC       PRGCNTR                '+' every 256 sectors
                    BNE       TC_NEXT
                    LDAA      #$2B
                    JSR       PUTCHR
-TC_NEXT            LDX       SCT_BUFF               Link in bytes 0-1
-                   BEQ       TC_DONE                00/00 = end of chain
-                   LDAA      SCT_BUFF
+TC_NEXT            LDAA      SCT_BUFF               Link in bytes 0-1
                    LDAB      SCT_BUFF+1
                    BRA       TC_LOOP
-TC_DONE            RTS
 
 * ==============================================================================
 * SET_BIT - set the bit for T/S A:B in the active bitmap (BITMAPBASE)
@@ -564,6 +590,9 @@ MSG_BADEND         FCB       $07
                    FCB       $04
 MSG_INTER          FCB       $07
                    FCC       '............Intersection at - '
+                   FCB       $04
+MSG_BADLNK         FCB       $07
+                   FCC       '............Bad link at - '
                    FCB       $04
 MSG_INIT           FCC       'Initializing bit maps.'
                    FCB       $04
